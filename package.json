@@ -1,0 +1,15 @@
+{
+  "name": "ai-image-generator",
+  "version": "1.0.0",
+  "private": true,
+  "description": "개인용 OpenAI 이미지 생성기",
+  "scripts": {
+    "start": "vite --host",
+    "dev": "vite --host",
+    "build": "vite build",
+    "preview": "vite preview --host"
+  },
+  "devDependencies": {
+    "vite": "^5.4.0"
+  }
+}
