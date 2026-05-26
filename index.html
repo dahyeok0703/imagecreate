@@ -172,7 +172,8 @@
 
     <label for="model">모델</label>
     <select id="model">
-      <option value="gpt-image-1">gpt-image-1 (최신)</option>
+      <option value="gpt-image-2">gpt-image-2 (최신)</option>
+      <option value="gpt-image-1">gpt-image-1</option>
       <option value="dall-e-3">dall-e-3</option>
       <option value="dall-e-2">dall-e-2</option>
     </select>
@@ -222,6 +223,11 @@ const els = {
 
 // 모델별 옵션 정의
 const MODELS = {
+  'gpt-image-2': {
+    sizes: ['1024x1024', '1536x1024', '1024x1536', 'auto'],
+    qualities: ['auto', 'high', 'medium', 'low'],
+    maxN: 4,
+  },
   'gpt-image-1': {
     sizes: ['1024x1024', '1536x1024', '1024x1536', 'auto'],
     qualities: ['auto', 'high', 'medium', 'low'],
@@ -302,8 +308,8 @@ async function generate() {
 
   const body = { model, prompt, n, size: els.size.value };
   if (m.qualities) body.quality = els.quality.value;
-  // gpt-image-1은 항상 base64로 반환됨. dall-e 계열은 b64_json 요청.
-  if (model !== 'gpt-image-1') body.response_format = 'b64_json';
+  // gpt-image 계열은 항상 base64로 반환됨. dall-e 계열만 b64_json 요청.
+  if (!model.startsWith('gpt-image-')) body.response_format = 'b64_json';
 
   els.generate.disabled = true;
   setStatus('생성 중... (모델/크기에 따라 수십 초 걸릴 수 있어요)', false, true);
