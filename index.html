@@ -153,6 +153,50 @@
     border-radius: 10px;
   }
   @keyframes shimmer { to { background-position: -200% 0; } }
+  .tabs { display: flex; gap: 6px; margin-bottom: 8px; }
+  .tab {
+    flex: 1;
+    padding: 9px;
+    text-align: center;
+    border: 1px solid var(--border);
+    background: var(--panel-2);
+    color: var(--muted);
+    border-radius: 8px;
+    cursor: pointer;
+    font-weight: 600;
+    font-size: 13px;
+  }
+  .tab.active { background: var(--accent-2); color: #fff; border-color: var(--accent-2); }
+  .dropzone {
+    border: 1px dashed var(--border);
+    border-radius: 10px;
+    padding: 16px;
+    text-align: center;
+    color: var(--muted);
+    font-size: 13px;
+    cursor: pointer;
+    background: var(--panel-2);
+  }
+  .dropzone:hover, .dropzone.drag { border-color: var(--accent); color: var(--text); }
+  .thumb-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+  .thumb {
+    position: relative;
+    width: 64px; height: 64px;
+    border-radius: 8px;
+    overflow: hidden;
+    border: 1px solid var(--border);
+  }
+  .thumb img { width: 100%; height: 100%; object-fit: cover; }
+  .thumb .x {
+    position: absolute; top: 2px; right: 2px;
+    width: 18px; height: 18px; line-height: 16px;
+    text-align: center;
+    background: rgba(0,0,0,.6); color: #fff;
+    border-radius: 50%; cursor: pointer; font-size: 12px;
+    border: none;
+  }
+  .hidden { display: none !important; }
+  .card-actions button.edit-btn { background: var(--accent-2); color: #fff; border-color: var(--accent-2); }
 </style>
 </head>
 <body>
@@ -169,6 +213,23 @@
       <button class="btn-secondary" id="toggleKey" type="button">표시</button>
     </div>
     <div class="hint">키는 브라우저(localStorage)에만 저장되고 OpenAI로만 전송됩니다.</div>
+
+    <div class="tabs" style="margin-top:18px;">
+      <div class="tab active" id="tabGen" data-mode="generate">생성</div>
+      <div class="tab" id="tabEdit" data-mode="edit">편집</div>
+    </div>
+
+    <div id="editPanel" class="hidden">
+      <label>편집할 원본 이미지</label>
+      <div class="dropzone" id="baseDrop">클릭하거나 이미지를 끌어다 놓으세요 · 여러 장 가능</div>
+      <input type="file" id="baseInput" accept="image/*" multiple class="hidden">
+      <div class="thumb-row" id="baseThumbs"></div>
+
+      <label>마스크 (선택) <span class="hint" style="display:inline">투명 영역만 다시 그려집니다</span></label>
+      <div class="dropzone" id="maskDrop">마스크 PNG 업로드 (선택)</div>
+      <input type="file" id="maskInput" accept="image/png" class="hidden">
+      <div class="thumb-row" id="maskThumbs"></div>
+    </div>
 
     <label for="model">모델</label>
     <select id="model">
@@ -219,7 +280,14 @@ const els = {
   prompt: $('prompt'), size: $('size'), count: $('count'),
   quality: $('quality'), qualityRow: $('qualityRow'),
   generate: $('generate'), status: $('status'), grid: $('grid'),
+  tabGen: $('tabGen'), tabEdit: $('tabEdit'), editPanel: $('editPanel'),
+  baseDrop: $('baseDrop'), baseInput: $('baseInput'), baseThumbs: $('baseThumbs'),
+  maskDrop: $('maskDrop'), maskInput: $('maskInput'), maskThumbs: $('maskThumbs'),
 };
+
+let mode = 'generate';        // 'generate' | 'edit'
+let baseFiles = [];           // 편집 원본 이미지 File 목록
+let maskFile = null;          // 마스크 File
 
 // 모델별 옵션 정의
 const MODELS = {
@@ -283,18 +351,101 @@ function showSkeletons(n) {
   els.grid.innerHTML = Array.from({length: n}, () => '<div class="skeleton"></div>').join('');
 }
 
+let lastImages = [];
 function renderImages(items) {
   if (!items.length) return;
+  lastImages = items;
+  const ts = Date.now();
   els.grid.innerHTML = items.map((src, i) => `
     <div class="card">
-      <img src="${src}" alt="생성된 이미지 ${i+1}" loading="lazy">
+      <img src="${src}" alt="이미지 ${i+1}" loading="lazy">
       <div class="card-actions">
-        <a href="${src}" download="ai-image-${Date.now()}-${i+1}.png">다운로드</a>
-        <button onclick="window.open('${src}', '_blank')">새 탭</button>
+        <button class="edit-btn" data-act="edit" data-i="${i}">이어서 편집</button>
+        <a href="${src}" download="ai-image-${ts}-${i+1}.png">다운로드</a>
+        <button data-act="open" data-i="${i}">새 탭</button>
       </div>
     </div>
   `).join('');
 }
+
+// 결과 카드 액션 (이벤트 위임)
+els.grid.addEventListener('click', async (e) => {
+  const btn = e.target.closest('button[data-act]');
+  if (!btn) return;
+  const src = lastImages[+btn.dataset.i];
+  if (!src) return;
+  if (btn.dataset.act === 'open') { window.open(src, '_blank'); return; }
+  if (btn.dataset.act === 'edit') {
+    btn.disabled = true;
+    try {
+      const blob = await (await fetch(src)).blob();
+      const file = new File([blob], `edit-${Date.now()}.png`, { type: blob.type || 'image/png' });
+      baseFiles = [file];
+      maskFile = null;
+      renderThumbs();
+      switchMode('edit');
+      els.prompt.focus();
+      setStatus('이 이미지를 원본으로 편집할 준비가 됐어요. 변경할 내용을 입력하세요.');
+    } catch {
+      setStatus('이미지를 불러오지 못했습니다.', true);
+    } finally { btn.disabled = false; }
+  }
+});
+
+// ===== 모드 전환 =====
+function switchMode(next) {
+  mode = next;
+  const isEdit = next === 'edit';
+  els.tabEdit.classList.toggle('active', isEdit);
+  els.tabGen.classList.toggle('active', !isEdit);
+  els.editPanel.classList.toggle('hidden', !isEdit);
+  els.generate.textContent = isEdit ? '편집 적용' : '이미지 생성';
+  els.prompt.placeholder = isEdit
+    ? '이미지를 어떻게 바꿀지 설명하세요. 예) 배경을 밤하늘로 바꾸고 별을 추가'
+    : '생성할 이미지를 설명하세요. 예) 노을 지는 바닷가에서 책을 읽는 고양이, 수채화 스타일';
+}
+els.tabGen.addEventListener('click', () => switchMode('generate'));
+els.tabEdit.addEventListener('click', () => switchMode('edit'));
+
+// ===== 파일 입력 (드롭존 + 썸네일) =====
+function renderThumbs() {
+  els.baseThumbs.innerHTML = baseFiles.map((f, i) => `
+    <div class="thumb"><img src="${URL.createObjectURL(f)}" alt="">
+      <button class="x" data-base="${i}">×</button></div>`).join('');
+  els.maskThumbs.innerHTML = maskFile ? `
+    <div class="thumb"><img src="${URL.createObjectURL(maskFile)}" alt="">
+      <button class="x" data-mask="1">×</button></div>` : '';
+}
+els.baseThumbs.addEventListener('click', e => {
+  const b = e.target.closest('button[data-base]');
+  if (b) { baseFiles.splice(+b.dataset.base, 1); renderThumbs(); }
+});
+els.maskThumbs.addEventListener('click', e => {
+  if (e.target.closest('button[data-mask]')) { maskFile = null; renderThumbs(); }
+});
+
+function wireDrop(drop, input, onFiles) {
+  drop.addEventListener('click', () => input.click());
+  input.addEventListener('change', () => { onFiles([...input.files]); input.value = ''; });
+  ['dragover','dragenter'].forEach(ev => drop.addEventListener(ev, e => {
+    e.preventDefault(); drop.classList.add('drag');
+  }));
+  ['dragleave','drop'].forEach(ev => drop.addEventListener(ev, e => {
+    e.preventDefault(); drop.classList.remove('drag');
+  }));
+  drop.addEventListener('drop', e => {
+    const files = [...(e.dataTransfer?.files || [])].filter(f => f.type.startsWith('image/'));
+    if (files.length) onFiles(files);
+  });
+}
+wireDrop(els.baseDrop, els.baseInput, files => {
+  baseFiles = baseFiles.concat(files).slice(0, 4);
+  renderThumbs();
+});
+wireDrop(els.maskDrop, els.maskInput, files => {
+  maskFile = files[0] || null;
+  renderThumbs();
+});
 
 async function generate() {
   const key = els.apikey.value.trim();
@@ -342,9 +493,64 @@ async function generate() {
   }
 }
 
-els.generate.addEventListener('click', generate);
+async function editImages() {
+  const key = els.apikey.value.trim();
+  const prompt = els.prompt.value.trim();
+  if (!key) return setStatus('API 키를 입력해주세요.', true);
+  if (!baseFiles.length) return setStatus('편집할 원본 이미지를 추가해주세요.', true);
+  if (!prompt) return setStatus('어떻게 편집할지 프롬프트를 입력해주세요.', true);
+
+  let model = els.model.value;
+  if (model === 'dall-e-3') {
+    model = 'gpt-image-2';
+    setStatus('dall-e-3는 편집을 지원하지 않아 gpt-image-2로 편집합니다.');
+  }
+  const m = MODELS[model];
+  const n = parseInt(els.count.value, 10);
+
+  const form = new FormData();
+  form.append('model', model);
+  form.append('prompt', prompt);
+  form.append('n', String(n));
+  form.append('size', els.size.value);
+  if (m.qualities) form.append('quality', els.quality.value);
+  if (model.startsWith('gpt-image-')) {
+    baseFiles.forEach(f => form.append('image[]', f, f.name));
+  } else {
+    form.append('image', baseFiles[0], baseFiles[0].name); // dall-e-2: 단일 정사각 PNG
+    form.append('response_format', 'b64_json');
+  }
+  if (maskFile) form.append('mask', maskFile, maskFile.name);
+
+  els.generate.disabled = true;
+  setStatus('편집 중... (수십 초 걸릴 수 있어요)', false, true);
+  showSkeletons(n);
+
+  try {
+    const res = await fetch('https://api.openai.com/v1/images/edits', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + key },
+      body: form,
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data?.error?.message || `요청 실패 (HTTP ${res.status})`);
+    const imgs = (data.data || []).map(d =>
+      d.b64_json ? 'data:image/png;base64,' + d.b64_json : d.url
+    ).filter(Boolean);
+    renderImages(imgs);
+    setStatus(`편집 완료 · ${imgs.length}장 · 결과 카드에서 "이어서 편집"으로 계속 다듬을 수 있어요`);
+  } catch (err) {
+    els.grid.innerHTML = '<div class="empty">편집에 실패했습니다.</div>';
+    setStatus(err.message || '알 수 없는 오류', true);
+  } finally {
+    els.generate.disabled = false;
+  }
+}
+
+function run() { (mode === 'edit' ? editImages : generate)(); }
+els.generate.addEventListener('click', run);
 els.prompt.addEventListener('keydown', e => {
-  if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') generate();
+  if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') run();
 });
 </script>
 </body>
